@@ -22,6 +22,9 @@ from tqdm import tqdm
 
 from .config import (
     MEDIA_DIR,
+    MEDIA_MODE,
+    MEDIA_ALLOW_LIST,
+    MAX_MEDIA_SIZE_MB,
     RATE_LIMIT_SECONDS,
     TELEGRAM_API_HASH,
     TELEGRAM_API_ID,
@@ -157,6 +160,36 @@ class TelegramScraper:
 
         return media_type, media_path, media_size
 
+    def should_download_media(self, chat_id: int, chat_name: str, username: str = None) -> bool:
+        """Check if media should be downloaded for this chat based on config."""
+        if MEDIA_MODE == "none":
+            return False
+        if MEDIA_MODE == "all":
+            return True
+        if MEDIA_MODE == "selective":
+            if not MEDIA_ALLOW_LIST:
+                return False
+            allow_list = [x.strip().lower() for x in MEDIA_ALLOW_LIST.split(",")]
+            # Check by chat ID
+            if str(chat_id) in allow_list:
+                return True
+            # Check by username
+            if username and f"@{username.lower()}" in allow_list:
+                return True
+            # Check by chat name (case-insensitive)
+            if chat_name and chat_name.lower() in allow_list:
+                return True
+            return False
+        return True
+
+    def should_download_media_by_size(self, media_size: int) -> bool:
+        """Check if media size is within limits."""
+        if MAX_MEDIA_SIZE_MB <= 0:
+            return True
+        if media_size is None:
+            return True
+        return media_size <= (MAX_MEDIA_SIZE_MB * 1024 * 1024)
+
     async def download_media(self, message, chat_id: int, message_id: int, media_type: str) -> str:
         """Download media file and return local path."""
         if not message.media:
@@ -242,12 +275,14 @@ class TelegramScraper:
                 sender_id, sender_name, sender_username = self.get_sender_name(message)
                 media_type, _, media_size = self.get_media_info(message)
 
-                # Download media
+                # Download media (respecting MEDIA_MODE settings)
                 media_path = None
                 if media_type and media_type != "webpage":
-                    media_path = await self.download_media(
-                        message, chat_id, message.id, media_type
-                    )
+                    if self.should_download_media(chat_id, chat_name, username=getattr(entity, "username", None)):
+                        if self.should_download_media_by_size(media_size):
+                            media_path = await self.download_media(
+                                message, chat_id, message.id, media_type
+                            )
 
                 # Handle forward
                 forward_from_id = None
@@ -345,6 +380,24 @@ class TelegramScraper:
         logger.info(
             f"Scraping complete. {dialog_count} chats, {total_messages} total messages."
         )
+
+    async def list_chats(self):
+        """List all chats with their IDs (for configuring MEDIA_ALLOW_LIST)."""
+        if not self.client:
+            await self.connect()
+
+        print("\n" + "="*80)
+        print(f"{'ID':<15} {'Type':<10} {'Username':<20} {'Name'}")
+        print("="*80)
+
+        async for dialog in self.client.iter_dialogs(limit=None):
+            entity = dialog.entity
+            chat_type = self.get_chat_type(entity)
+            username = getattr(entity, "username", "") or ""
+            name = getattr(entity, "title", None) or getattr(entity, "first_name", "") or "Unknown"
+            print(f"{entity.id:<15} {chat_type:<10} @{username:<20} {name}")
+
+        print("="*80 + "\n")
 
     def stop(self):
         """Signal the scraper to stop."""

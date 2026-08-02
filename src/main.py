@@ -112,6 +112,7 @@ def main():
         "index": cmd_index,
         "serve": cmd_serve,
         "status": cmd_status,
+        "list": cmd_list,
     }
 
     if command not in commands:
@@ -120,6 +121,19 @@ def main():
         sys.exit(1)
 
     commands[command]()
+
+
+def cmd_list():
+    """List all chats with IDs (for configuring MEDIA_ALLOW_LIST)."""
+    scraper = TelegramScraper()
+
+    async def run():
+        try:
+            await scraper.list_chats()
+        finally:
+            await scraper.disconnect()
+
+    asyncio.run(run())
 
 
 if __name__ == "__main__":
